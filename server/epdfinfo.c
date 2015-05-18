@@ -18,7 +18,16 @@
 #include <config.h>
 
 #include <assert.h>
-#include <err.h>
+#ifndef _WIN32
+#  include <err.h>
+#else
+#  include <errno.h>
+#  define err(retval, ...) do {                      \
+    fprintf(stderr, __VA_ARGS__);                    \
+    fprintf(stderr, "Undefined error: %d\n", errno); \
+    exit(retval);                                    \
+  } while(0)
+#endif
 #ifdef HAVE_ERROR_H
 #  include <error.h>
 #endif
@@ -665,7 +674,7 @@ command_arg_split (const char *args, int *nargs)
       gboolean esc = FALSE;
       char *buffer_p = buffer;
 
-      while (*args && (*args != ':' || esc))
+      while (*args && (*args != '#' || esc))
         {
           if (esc)
             {
@@ -730,6 +739,7 @@ command_arg_parse_arg (const epdfinfo_t *ctx, const char *arg,
     {
     case ARG_DOC:
       {
+        fprintf(stderr, "Abriendo %s\n", arg);
         document_t *doc = document_open (ctx, arg, NULL, &gerror);
         cerror_if_not (doc, error_msg,
                        "Error opening %s:%s", arg,
@@ -3280,13 +3290,22 @@ static const command_t commands [] =
     DEC_CMD2 (renderpage_highlight, "renderpage-highlight")
   };
 
+int sdm() {
+  fprintf(stderr, "reading command...\n");
+  return 1;
+}
+
 int main(int argc, char **argv)
 {
   epdfinfo_t ctx = {0};
-  char *line = NULL;
   ssize_t read;
-  size_t line_size;
+  size_t max_line_size = 0x4000;
+  char line[max_line_size];
+#ifdef _WIN32
+  const char *error_log = "epdfinfo.log"; /* "/dev/null"; */
+#else
   const char *error_log = "/tmp/epdfinfo.log"; /* "/dev/null"; */
+#endif
 
   if (argc > 2)
     {
@@ -3299,6 +3318,9 @@ int main(int argc, char **argv)
   if (! freopen (error_log, "a", stderr))
     err (2, "Unable to redirect stderr");
 
+  /* if (! freopen (NULL, "rb", stdin)) */
+  /*   fprintf(stderr, "Unable to reopen stdin\n"); */
+
 #if ! GLIB_CHECK_VERSION(2,36,0)
   g_type_init ();
 #endif
@@ -3306,7 +3328,7 @@ int main(int argc, char **argv)
 
   setvbuf (stdout, NULL, _IOFBF, BUFSIZ);
 
-  while ((read = getline (&line, &line_size, stdin)) != -1)
+  while ( sdm() && fgets (line, max_line_size, stdin))
     {
       int nargs = 0;
       command_arg_t *cmd_args = NULL;
@@ -3314,13 +3336,18 @@ int main(int argc, char **argv)
       gchar *error_msg = NULL;
       int i;
 
+      fprintf(stderr, "Command readed\n");
+      fprintf(stderr, "command: %s\n", line);
+      read = strlen(line);
+      assert(read < max_line_size-1);
+
       if (read <= 1 || line[read - 1] != '\n')
         {
           fprintf (stderr, "Skipped parts of a line: `%s'\n", line);
-          goto next_line;
+          continue;
         }
 
-      line[read - 1] = '\0';
+      /* line[read - 1] = '\0'; */
       args = command_arg_split (line, &nargs);
       if (nargs == 0)
         continue;
@@ -3354,9 +3381,6 @@ int main(int argc, char **argv)
       for (i = 0; i < nargs; ++i)
         g_free (args[i]);
       g_free (args);
-    next_line:
-      free (line);
-      line = NULL;
     }
 
   if (ferror (stdin))
